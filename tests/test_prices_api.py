@@ -74,9 +74,11 @@ async def test_get_prices_by_utc_date(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     # 2026-10-14 00:00:00 UTC, midday, and next midnight.
+    await add_price(session_factory, Ticker.BTC_USD, "60000", 1_791_935_999)
     await add_price(session_factory, Ticker.BTC_USD, "61000", 1_791_936_000)
     await add_price(session_factory, Ticker.BTC_USD, "62000", 1_791_979_200)
     await add_price(session_factory, Ticker.BTC_USD, "63000", 1_792_022_400)
+    await add_price(session_factory, Ticker.ETH_USD, "4000", 1_791_979_200)
 
     response = await client.get(
         "/api/v1/prices/by-date",
@@ -118,3 +120,64 @@ async def test_ticker_is_required_for_every_price_endpoint(
     ]
 
     assert all(response.status_code == 422 for response in responses)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "value",
+    [
+        "1791936000",
+        "2026-10-14T00:00:00",
+        "20261014",
+        "2026-02-30",
+        "2026-2-01",
+        "",
+    ],
+)
+async def test_date_requires_a_valid_calendar_date(
+    client: AsyncClient, value: str
+) -> None:
+    response = await client.get(
+        "/api/v1/prices/by-date", params={"ticker": "btc_usd", "date": value}
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["query", "date"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", ["0001-01-01", "9999-12-31", "2024-02-29"])
+async def test_extreme_and_leap_dates_do_not_overflow(
+    client: AsyncClient, value: str
+) -> None:
+    response = await client.get(
+        "/api/v1/prices/by-date", params={"ticker": "btc_usd", "date": value}
+    )
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+@pytest.mark.asyncio
+async def test_same_second_uses_id_to_select_latest(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    await add_price(session_factory, Ticker.ETH_USD, "1", 100)
+    await add_price(session_factory, Ticker.ETH_USD, "2", 100)
+    await add_price(session_factory, Ticker.BTC_USD, "3", 200)
+    response = await client.get("/api/v1/prices/latest", params={"ticker": "eth_usd"})
+    assert response.status_code == 200
+    assert Decimal(response.json()["price"]) == Decimal("2")
+    response = await client.get("/api/v1/prices", params={"ticker": "eth_usd"})
+    assert [Decimal(item["price"]) for item in response.json()] == [
+        Decimal("2"),
+        Decimal("1"),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/api/v1/prices", "/api/v1/prices/by-date"])
+async def test_empty_lists(client: AsyncClient, path: str) -> None:
+    response = await client.get(
+        path, params={"ticker": "eth_usd", "date": "2026-10-14"}
+    )
+    assert response.status_code == 200
+    assert response.json() == []

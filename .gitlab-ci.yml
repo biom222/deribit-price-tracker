@@ -16,6 +16,13 @@ ruff:
 
 pytest:
   stage: test
+  services:
+    - name: postgres:17-alpine
+      alias: postgres
+  variables:
+    POSTGRES_DB: deribit_test
+    POSTGRES_USER: deribit_test
+    POSTGRES_PASSWORD: ci_test_only
+    TEST_DATABASE_URL: postgresql+asyncpg://deribit_test:ci_test_only@postgres:5432/deribit_test
   script:
     - pytest
-

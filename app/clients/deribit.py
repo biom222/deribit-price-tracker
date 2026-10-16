@@ -1,5 +1,7 @@
+import json
 import logging
 from decimal import Decimal, InvalidOperation
+from functools import partial
 from types import TracebackType
 from typing import Any, Self
 
@@ -58,7 +60,9 @@ class DeribitClient:
                     raise DeribitClientError(
                         f"Deribit returned HTTP {response.status} for {ticker.value}"
                     )
-                payload = await response.json()
+                payload = await response.json(
+                    loads=partial(json.loads, parse_float=Decimal)
+                )
         except DeribitClientError:
             raise
         except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
@@ -76,6 +80,11 @@ class DeribitClient:
         if not isinstance(payload, dict):
             raise DeribitClientError(
                 f"Unexpected Deribit response for {ticker.value}: object expected"
+            )
+
+        if "error" in payload:
+            raise DeribitClientError(
+                f"Deribit returned an API error for {ticker.value}"
             )
 
         result = payload.get("result")

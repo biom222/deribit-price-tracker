@@ -1,18 +1,17 @@
 # Deribit Price Tracker
 
-Небольшой backend-сервис, который раз в минуту получает публичные индексные
-цены `btc_usd` и `eth_usd` с Deribit, сохраняет их в PostgreSQL и предоставляет
-REST API для чтения истории.
+A small backend that polls Deribit for `btc_usd` and `eth_usd` index prices
+every minute, stores them in PostgreSQL and exposes a read-only REST API.
 
 ## Features
 
-- получение `btc_usd` и `eth_usd` через официальный Deribit JSON-RPC HTTP API;
-- периодический запуск через Celery Beat каждые 60 секунд;
-- хранение цены как `NUMERIC`, времени получения как UNIX timestamp в секундах;
-- FastAPI API со строгой валидацией ticker и даты;
-- Alembic-миграции, автоматически применяемые при Docker Compose startup;
+- `btc_usd` and `eth_usd` from the public Deribit JSON-RPC HTTP API;
+- Celery Beat polling every 60 seconds;
+- `NUMERIC` prices and UNIX receipt timestamps in seconds;
+- FastAPI with ticker and calendar date validation;
+- Alembic migrations applied automatically on Docker Compose startup;
 - unit/API tests без реальных запросов к Deribit;
-- Ruff и GitLab CI.
+- Ruff and GitLab CI.
 
 ## Stack
 
@@ -21,7 +20,7 @@ PostgreSQL, Alembic, Celery, Redis, aiohttp, pytest, Docker Compose и Ruff.
 
 ## Architecture
 
-Сбор данных:
+Collection:
 
 ```text
 Celery Beat (60 s)
@@ -33,17 +32,16 @@ DeribitClient → Deribit public API
 PriceRepository → PostgreSQL
 ```
 
-Чтение данных:
+Reading:
 
 ```text
 FastAPI route → PriceService → PriceRepository → PostgreSQL
 ```
 
-`DeribitClient` отвечает только за HTTP и проверку ответа Deribit.
-`PriceRepository` содержит SQLAlchemy-запросы. `PriceService` содержит сценарии
-чтения и перевод календарной даты в UTC-диапазон. Routes занимаются HTTP-
-валидацией и формированием ответа. Celery task только координирует получение и
-сохранение данных.
+`DeribitClient` owns HTTP and Deribit response validation. `PriceRepository`
+owns SQLAlchemy queries. `PriceService` handles reads and UTC date boundaries.
+Routes handle HTTP validation and responses. The Celery task coordinates
+fetching and saving prices.
 
 ## Project structure
 
@@ -99,22 +97,47 @@ docker compose down -v  # also deletes local PostgreSQL and Redis volumes
 
 ### Without Docker
 
-Run PostgreSQL and Redis separately, set `.env` URLs to their host addresses,
-then use four terminals:
+Run PostgreSQL and Redis separately. Celery workers are supported on Linux;
+on Windows use Docker Compose or WSL2, not a native Windows worker.
+Prepare the environment once:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate          # Windows PowerShell: .venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
 cp .env.example .env
+```
+
+Then edit `DATABASE_URL` and `REDIS_URL` in `.env`: use the actual host, port,
+database and credentials of your running PostgreSQL and Redis. The example
+hostnames `postgres` and `redis` work only inside the Compose network.
+`POSTGRES_*` initializes the Compose database; the Python application reads
+only `DATABASE_URL` for its database connection.
+
+Apply migrations, then run each process in a separate terminal with the same
+virtual environment activated (three terminals total):
+
+```bash
 alembic upgrade head
 uvicorn app.main:app --reload
-celery -A app.core.celery:celery_app worker --loglevel=INFO
+celery -A app.core.celery:celery_app worker --concurrency=1 --loglevel=INFO
 celery -A app.core.celery:celery_app beat --loglevel=INFO
 ```
 
-When running services directly on the host, set `POSTGRES_HOST=localhost` and
-use `localhost` in `DATABASE_URL` and `REDIS_URL`.
+### Deployment notes
+
+Use one Beat instance and one collection worker with `--concurrency=1` and
+prefetch `1`, as configured in Compose. This serializes collection runs;
+additional collection workers would require a shared lock to prevent overlap.
+API processes can be scaled independently.
+
+Set real database credentials before deployment and keep `.env` outside Git.
+The provided Compose configuration exposes only the API port, not PostgreSQL
+or Redis. For internet-facing deployment, put the API behind a TLS reverse
+proxy and restrict network access as needed; authentication is outside this
+assignment's scope. `/health` checks process liveness, not database readiness.
+For an updated schema, rerun `docker compose run --rm migrate` before restarting
+application services; back up PostgreSQL before applying production migrations.
 
 ## API
 
@@ -144,18 +167,21 @@ Returns `404` when the ticker has no records.
 curl "http://localhost:8000/api/v1/prices/by-date?ticker=btc_usd&date=2026-10-14"
 ```
 
-`date` must use `YYYY-MM-DD`. The response contains all records from 00:00:00
+`date` accepts only a valid `YYYY-MM-DD` calendar date, not a UNIX timestamp or
+datetime. The response contains all records from 00:00:00
 inclusive until the next UTC midnight exclusive.
 
 ### Health and Swagger
 
-- health: `GET /health`
+- liveness: `GET /health` (technical endpoint; no ticker needed)
 - Swagger UI: `http://localhost:8000/api/docs`
 - OpenAPI schema: `http://localhost:8000/openapi.json`
 
 FastAPI returns its standard `422` response for a missing/unsupported ticker or
-an invalid date. Unexpected SQLAlchemy failures are logged and returned as
-`503 Database unavailable`.
+an invalid date. Database connection failures and pool timeouts are logged and
+returned as `503 Database unavailable`. Unexpected application/SQL errors remain
+`500` responses. Health and documentation routes are technical endpoints; the
+required ticker applies to all three price methods.
 
 ## Tests
 
@@ -164,14 +190,30 @@ pip install -e ".[dev]"
 pytest
 ```
 
-API tests exercise the real service and repository through an isolated SQLite
-database. Production uses PostgreSQL through `asyncpg`; the Alembic migration
-uses PostgreSQL-compatible types. Deribit client tests use fake HTTP sessions,
-so the suite never calls the real exchange.
+API tests exercise the real service, repository and FastAPI lifespan through
+an isolated SQLite database. Deribit client and collection tests replace HTTP
+requests, so the suite never calls the real exchange or a Redis broker.
+
+The PostgreSQL integration test applies `alembic upgrade head`, compares the
+migrated schema against ORM metadata and verifies exact Decimal persistence,
+ticker filtering and deterministic ordering. It is skipped unless
+`TEST_DATABASE_URL` points to a dedicated PostgreSQL test database:
+
+```bash
+export TEST_DATABASE_URL=postgresql+asyncpg://test_user:test_password@localhost:5432/deribit_test
+pytest
+```
+
+In PowerShell use `$env:TEST_DATABASE_URL = 'postgresql+asyncpg://...'`.
+Never point this variable at production: the integration test applies migrations.
+Its data writes are rolled back. GitLab CI provides its own PostgreSQL service
+and runs the integration test automatically.
 
 Covered cases include all prices, newest price, empty-result `404`, UTC date
 filter, required/unsupported ticker, invalid date, valid Deribit parsing, HTTP
-errors and malformed Deribit payloads.
+errors and malformed Deribit payloads. Regression cases cover strict/extreme
+dates, equal timestamps, exact JSON decimals, HTTP session ownership, engine
+cleanup, database status codes and collection failures with partial success.
 
 ## Lint
 
@@ -197,7 +239,7 @@ ruff format .
 | `DERIBIT_TIMEOUT_SECONDS` | Total HTTP timeout |
 | `LOG_LEVEL` | Application and worker log level |
 | `API_PORT` | Host port mapped to container port 8000 |
-| `POSTGRES_*` | PostgreSQL container initialization |
+| `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` | PostgreSQL container initialization |
 
 `.env` is ignored by Git. Only non-secret examples live in `.env.example`.
 
@@ -216,7 +258,10 @@ domain layer.
 
 Financial values must not accumulate binary floating-point artifacts. Python
 uses `Decimal`, PostgreSQL uses `NUMERIC(28, 10)`, and API prices serialize as
-strings to preserve the exact stored value.
+strings to preserve the exact stored value. JSON numbers are parsed directly
+as `Decimal` before reaching the database, without an intermediate `float`.
+`NUMERIC(28, 10)` supports 18 integer and 10 fractional digits; PostgreSQL rounds
+additional fractional digits to this storage scale.
 
 ### UNIX timestamp and UTC
 
@@ -271,24 +316,28 @@ occur in the same second.
 
 ### Task failure semantics
 
-The task logs failures per ticker and continues. Partial success is preferable
-to losing both data points. There is no retry framework because the next Beat
-run arrives in one minute; automatic rapid retries could amplify an exchange
-or database outage.
+Each ticker has a 25-second budget for fetching and saving. Expected network,
+database and timeout failures are logged; the other ticker is still attempted.
+After both attempts, any collected errors are raised together so Celery marks
+the task as failed while preserving successful writes. Unexpected errors outside
+the handled network/database exceptions propagate immediately. There are no
+automatic retries: the next scheduled run arrives in one minute.
+
+Beat messages expire after 60 seconds to discard stale queued polls. The task
+has a 55-second soft and 60-second hard limit as a worker-level safeguard on
+Linux prefork workers. These bounds limit outage backlog; they do not provide
+exactly-once delivery or recover samples missed while services are down.
+
+### Resource ownership and module-level objects
+
+FastAPI owns its engine for the application lifespan; each request owns a
+session. Each Celery invocation creates and disposes its own engine and HTTP
+client inside the event loop started by `asyncio.run()`. No live connection is
+shared across event loops or worker processes. Settings are immutable and cached.
+Module-level FastAPI/Celery entry points, routers and loggers are framework
+registration objects, not shared database or HTTP sessions.
 
 ## GitLab CI
 
-`.gitlab-ci.yml` runs Ruff checks and pytest with Python 3.12. After creating an
-empty GitLab project, push this repository normally:
-
-```bash
-git init
-git add .
-git commit -m "Implement Deribit price tracker"
-git branch -M main
-git remote add origin <gitlab-repository-url>
-git push -u origin main
-```
-
-Repository creation and push require the candidate's GitLab account and are
-therefore intentionally not automated by the application.
+`.gitlab-ci.yml` runs Ruff checks and pytest with Python 3.12 and an isolated
+PostgreSQL 17 service for integration coverage.

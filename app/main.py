@@ -4,7 +4,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import DisconnectionError, InterfaceError, OperationalError
+from sqlalchemy.exc import TimeoutError as DatabaseTimeoutError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.routes import prices_router
@@ -36,23 +37,24 @@ def create_app(
 
     application = FastAPI(
         title="Deribit Price Tracker",
-        version="1.0.0",
+        version="0.1.0",
         docs_url="/api/docs",
         redoc_url=None,
         lifespan=lifespan,
     )
-    if session_factory is not None:
-        application.state.session_factory = session_factory
     application.include_router(prices_router, prefix="/api/v1")
 
     @application.get("/health", tags=["health"])
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    @application.exception_handler(SQLAlchemyError)
+    @application.exception_handler(OperationalError)
+    @application.exception_handler(InterfaceError)
+    @application.exception_handler(DisconnectionError)
+    @application.exception_handler(DatabaseTimeoutError)
     async def database_error_handler(
         request: Request,
-        exception: SQLAlchemyError,
+        exception: Exception,
     ) -> JSONResponse:
         logger.exception("Database operation failed for %s", request.url.path)
         return JSONResponse(

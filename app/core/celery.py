@@ -15,6 +15,7 @@ def create_celery_app() -> Celery:
             "collect-index-prices-every-minute": {
                 "task": "app.tasks.prices.collect_index_prices",
                 "schedule": 60.0,
+                "options": {"expires": 60},
             }
         },
         broker_connection_retry_on_startup=True,
@@ -22,6 +23,7 @@ def create_celery_app() -> Celery:
         accept_content=["json"],
         timezone="UTC",
         enable_utc=True,
+        worker_prefetch_multiplier=1,
     )
     return application
 

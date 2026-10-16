@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time
 
 from app.core.tickers import Ticker
 from app.db.models.price import PriceRecord
@@ -21,9 +21,9 @@ class PriceService:
         target_date: date,
     ) -> list[PriceRecord]:
         start = datetime.combine(target_date, time.min, tzinfo=UTC)
-        end = start + timedelta(days=1)
+        start_timestamp = int(start.timestamp())
         return await self._repository.list_between(
             ticker,
-            int(start.timestamp()),
-            int(end.timestamp()),
+            start_timestamp,
+            start_timestamp + 86_400,
         )

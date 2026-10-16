@@ -20,7 +20,6 @@ class PriceRepository:
         record = PriceRecord(ticker=ticker.value, price=price, timestamp=timestamp)
         self._session.add(record)
         await self._session.commit()
-        await self._session.refresh(record)
         return record
 
     async def list_by_ticker(self, ticker: Ticker) -> list[PriceRecord]:

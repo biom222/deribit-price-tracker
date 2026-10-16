@@ -1,1 +1,0 @@
-"""Deribit price tracker application."""

@@ -6,4 +6,8 @@ __pycache__
 .ruff_cache
 tests
 *.pyc
-
+work
+outputs
+build
+dist
+*.egg-info

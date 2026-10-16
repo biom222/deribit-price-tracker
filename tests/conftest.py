@@ -20,8 +20,10 @@ async def session_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
         await connection.run_sync(Base.metadata.create_all)
 
     factory = async_sessionmaker(engine, expire_on_commit=False)
-    yield factory
-    await engine.dispose()
+    try:
+        yield factory
+    finally:
+        await engine.dispose()
 
 
 @pytest.fixture
@@ -30,5 +32,8 @@ async def client(
 ) -> AsyncIterator[AsyncClient]:
     application = create_app(session_factory)
     transport = ASGITransport(app=application)
-    async with AsyncClient(transport=transport, base_url="http://test") as test_client:
-        yield test_client
+    async with application.router.lifespan_context(application):
+        async with AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as test_client:
+            yield test_client

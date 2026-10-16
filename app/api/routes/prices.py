@@ -2,6 +2,7 @@ from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, status
+from pydantic import BeforeValidator
 
 from app.api.dependencies import PriceServiceDependency
 from app.core.tickers import Ticker
@@ -9,6 +10,15 @@ from app.schemas.price import PriceResponse
 
 router = APIRouter(prefix="/prices", tags=["prices"])
 TickerQuery = Annotated[Ticker, Query(description="Supported Deribit index name")]
+
+
+def parse_calendar_date(value: str) -> date:
+    if len(value) != 10 or value[4] != "-" or value[7] != "-":
+        raise ValueError("Date must use YYYY-MM-DD")
+    return date.fromisoformat(value)
+
+
+CalendarDate = Annotated[date, BeforeValidator(parse_calendar_date)]
 
 
 @router.get("", response_model=list[PriceResponse])
@@ -39,7 +49,7 @@ async def get_prices_by_date(
     ticker: TickerQuery,
     service: PriceServiceDependency,
     target_date: Annotated[
-        date,
+        CalendarDate,
         Query(alias="date", description="UTC calendar date in YYYY-MM-DD format"),
     ],
 ) -> list[PriceResponse]:
