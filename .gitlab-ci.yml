@@ -1,0 +1,21 @@
+image: python:3.12-slim
+
+stages:
+  - quality
+  - test
+
+before_script:
+  - pip install --no-cache-dir --upgrade pip
+  - pip install --no-cache-dir -e ".[dev]"
+
+ruff:
+  stage: quality
+  script:
+    - ruff check .
+    - ruff format --check .
+
+pytest:
+  stage: test
+  script:
+    - pytest
+
