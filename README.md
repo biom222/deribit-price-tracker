@@ -1,121 +1,126 @@
 # Deribit Price Tracker
 
-A small backend that polls Deribit for `btc_usd` and `eth_usd` index prices
-every minute, stores them in PostgreSQL and exposes a read-only REST API.
+Небольшой сервис, который каждую минуту получает индексные цены `btc_usd` и
+`eth_usd` с Deribit, сохраняет их в PostgreSQL и предоставляет REST API для
+чтения истории.
 
-## Features
+## Возможности
 
-- `btc_usd` and `eth_usd` from the public Deribit JSON-RPC HTTP API;
-- Celery Beat polling every 60 seconds;
-- `NUMERIC` prices and UNIX receipt timestamps in seconds;
-- FastAPI with ticker and calendar date validation;
-- Alembic migrations applied automatically on Docker Compose startup;
-- unit/API tests без реальных запросов к Deribit;
-- Ruff and GitLab CI.
+- получение `btc_usd` и `eth_usd` через публичный JSON-RPC HTTP API Deribit;
+- запуск сбора каждые 60 секунд через Celery Beat;
+- хранение цен в `NUMERIC`, а времени получения — в UNIX-секундах;
+- валидация тикера и календарной даты в FastAPI;
+- автоматическое применение миграций Alembic при запуске Docker Compose;
+- модульные тесты и тесты API без реальных запросов к Deribit;
+- проверка кода через Ruff и GitLab CI.
 
-## Stack
+## Стек технологий
 
 Python 3.12, FastAPI, Pydantic v2, pydantic-settings, SQLAlchemy 2.x,
 PostgreSQL, Alembic, Celery, Redis, aiohttp, pytest, Docker Compose и Ruff.
 
-## Architecture
+## Архитектура
 
-Collection:
+Сбор данных:
 
 ```text
-Celery Beat (60 s)
+Celery Beat (60 секунд)
         ↓
 Celery Worker
         ↓
-DeribitClient → Deribit public API
+DeribitClient → публичный API Deribit
         ↓
 PriceRepository → PostgreSQL
 ```
 
-Reading:
+Чтение данных:
 
 ```text
-FastAPI route → PriceService → PriceRepository → PostgreSQL
+Маршрут FastAPI → PriceService → PriceRepository → PostgreSQL
 ```
 
-`DeribitClient` owns HTTP and Deribit response validation. `PriceRepository`
-owns SQLAlchemy queries. `PriceService` handles reads and UTC date boundaries.
-Routes handle HTTP validation and responses. The Celery task coordinates
-fetching and saving prices.
+`DeribitClient` отвечает за HTTP-запросы и проверку ответов Deribit.
+`PriceRepository` содержит запросы SQLAlchemy. `PriceService` отвечает за чтение
+цен и преобразование календарной даты в диапазон UTC. Маршруты выполняют
+HTTP-валидацию и формируют ответы. Задача Celery координирует получение
+и сохранение цен.
 
-## Project structure
+## Структура проекта
 
 ```text
 app/
-  api/              FastAPI dependencies and routes
-  clients/          Deribit HTTP client
-  core/             settings, logging, ticker enum, Celery setup
-  db/               SQLAlchemy model, session factory, repository
-  schemas/          response schemas
-  services/         read use cases and UTC date conversion
-  tasks/            periodic collection task
-alembic/             database migrations
-tests/               API/repository and Deribit client tests
+  api/              зависимости и маршруты FastAPI
+  clients/          HTTP-клиент Deribit
+  core/             настройки, логирование, тикеры и конфигурация Celery
+  db/               модель SQLAlchemy, фабрика сессий и репозиторий
+  schemas/          схемы ответов
+  services/         чтение цен и преобразование дат в UTC
+  tasks/            периодическая задача сбора цен
+alembic/             миграции базы данных
+tests/               тесты API, репозитория, клиента и сборщика
 Dockerfile
 docker-compose.yml
 ```
 
-## Running locally
+## Локальный запуск
 
-### Docker (recommended)
+### Через Docker — рекомендуемый способ
 
-Requirements: Docker Engine with Docker Compose v2.
+Потребуются Docker Engine и Docker Compose v2.
 
-1. Create the environment file:
+1. Создайте файл переменных окружения:
 
    ```bash
    cp .env.example .env
    ```
 
-2. Change `POSTGRES_PASSWORD` and update the password inside `DATABASE_URL` in
-   `.env`. For the provided URL syntax, use a URL-safe password.
+2. Измените `POSTGRES_PASSWORD` и пароль внутри `DATABASE_URL` в `.env`.
+   Для приведённого формата URL используйте пароль без символов, требующих
+   URL-кодирования.
 
-3. Build and start all services:
+3. Соберите образы и запустите все сервисы:
 
    ```bash
    docker compose up --build
    ```
 
-The one-shot `migrate` service runs `alembic upgrade head`. API, worker and beat
-start only after the migration succeeds. The API is then available at
-`http://localhost:8000`; Beat sends the first periodic task after 60 seconds.
-If port 8000 is already occupied, set `API_PORT` in `.env` (for example,
-`API_PORT=18000`) and use that port in the URLs below.
+Одноразовый сервис `migrate` выполняет `alembic upgrade head`. API, обработчик
+задач и планировщик запускаются только после успешной миграции. API доступен
+по адресу `http://localhost:8000`; первую периодическую задачу Beat отправляет
+через 60 секунд после запуска.
 
-Useful commands:
+Если порт 8000 занят, задайте `API_PORT` в `.env`, например `API_PORT=18000`,
+и используйте этот порт в приведённых ниже адресах.
+
+Полезные команды:
 
 ```bash
 docker compose logs -f api celery-worker celery-beat
 docker compose down
-docker compose down -v  # also deletes local PostgreSQL and Redis volumes
+docker compose down -v  # также удаляет локальные тома PostgreSQL и Redis
 ```
 
-### Without Docker
+### Без Docker
 
-Run PostgreSQL and Redis separately. Celery workers are supported on Linux;
-on Windows use Docker Compose or WSL2, not a native Windows worker.
-Prepare the environment once:
+Запустите PostgreSQL и Redis отдельно. Обработчики Celery поддерживаются
+на Linux; для Windows используйте Docker Compose или WSL2.
+Сначала подготовьте окружение:
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate          # Windows PowerShell: .venv\Scripts\Activate.ps1
+source .venv/bin/activate          # в Windows PowerShell: .venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
 cp .env.example .env
 ```
 
-Then edit `DATABASE_URL` and `REDIS_URL` in `.env`: use the actual host, port,
-database and credentials of your running PostgreSQL and Redis. The example
-hostnames `postgres` and `redis` work only inside the Compose network.
-`POSTGRES_*` initializes the Compose database; the Python application reads
-only `DATABASE_URL` for its database connection.
+Затем настройте `DATABASE_URL` и `REDIS_URL` в `.env`: укажите фактические адреса,
+порты и учётные данные запущенных PostgreSQL и Redis. Имена `postgres` и `redis`
+из примера работают только внутри сети Compose. Переменные `POSTGRES_*`
+используются для первоначальной настройки контейнера PostgreSQL; приложение
+подключается к базе только через `DATABASE_URL`.
 
-Apply migrations, then run each process in a separate terminal with the same
-virtual environment activated (three terminals total):
+Примените миграции, затем запустите каждый из трёх процессов в отдельном
+терминале с активированным виртуальным окружением:
 
 ```bash
 alembic upgrade head
@@ -124,220 +129,239 @@ celery -A app.core.celery:celery_app worker --concurrency=1 --loglevel=INFO
 celery -A app.core.celery:celery_app beat --loglevel=INFO
 ```
 
-### Deployment notes
+### Развёртывание
 
-Use one Beat instance and one collection worker with `--concurrency=1` and
-prefetch `1`, as configured in Compose. This serializes collection runs;
-additional collection workers would require a shared lock to prevent overlap.
-API processes can be scaled independently.
+Используйте один экземпляр Beat и один обработчик сбора с `--concurrency=1`
+и предварительной загрузкой одной задачи, как настроено в Compose.
+Так запуски выполняются последовательно. Для нескольких обработчиков
+потребуется общая блокировка, предотвращающая одновременный сбор.
+Процессы API можно масштабировать независимо.
 
-Set real database credentials before deployment and keep `.env` outside Git.
-The provided Compose configuration exposes only the API port, not PostgreSQL
-or Redis. For internet-facing deployment, put the API behind a TLS reverse
-proxy and restrict network access as needed; authentication is outside this
-assignment's scope. `/health` checks process liveness, not database readiness.
-For an updated schema, rerun `docker compose run --rm migrate` before restarting
-application services; back up PostgreSQL before applying production migrations.
+Перед развёртыванием задайте рабочие учётные данные БД и не добавляйте `.env`
+в Git. Конфигурация Compose публикует только порт API; PostgreSQL и Redis
+доступны внутри сети контейнеров. Для доступа из интернета разместите API
+за обратным прокси с TLS и при необходимости ограничьте сетевой доступ.
+Аутентификация не входит в рамки задания. `/health` проверяет работоспособность
+процесса, но не готовность базы данных.
+
+При изменении схемы выполните `docker compose run --rm migrate` перед
+перезапуском сервисов приложения. Перед применением миграций в рабочей среде
+создавайте резервную копию PostgreSQL.
 
 ## API
 
-All price endpoints require `ticker=btc_usd` or `ticker=eth_usd`. Lists are
-ordered newest-first; records with equal timestamps are ordered by newest ID.
-Prices are JSON strings so decimal precision is not lost by clients.
+Все методы чтения цен требуют `ticker=btc_usd` или `ticker=eth_usd`.
+Списки возвращаются от новых записей к старым. При одинаковом времени получения
+первой идёт запись с большим ID. Цены передаются строками JSON, чтобы клиенты
+не теряли десятичную точность.
 
-### All saved prices
+### Все сохранённые цены
 
 ```bash
 curl "http://localhost:8000/api/v1/prices?ticker=btc_usd"
 ```
 
-Returns an empty list when there are no records.
+Если записей нет, возвращается пустой список.
 
-### Latest price
+### Последняя цена
 
 ```bash
 curl "http://localhost:8000/api/v1/prices/latest?ticker=btc_usd"
 ```
 
-Returns `404` when the ticker has no records.
+Если для тикера нет записей, возвращается `404`.
 
-### Prices for a UTC date
+### Цены за дату в UTC
 
 ```bash
 curl "http://localhost:8000/api/v1/prices/by-date?ticker=btc_usd&date=2026-10-14"
 ```
 
-`date` accepts only a valid `YYYY-MM-DD` calendar date, not a UNIX timestamp or
-datetime. The response contains all records from 00:00:00
-inclusive until the next UTC midnight exclusive.
+Параметр `date` принимает только корректную календарную дату в формате
+`YYYY-MM-DD`. UNIX-время и дата со временем не принимаются. В ответ входят
+все записи от 00:00:00 указанного дня включительно до следующей полуночи UTC
+не включительно.
 
-### Health and Swagger
+### Проверка работоспособности и Swagger
 
-- liveness: `GET /health` (technical endpoint; no ticker needed)
-- Swagger UI: `http://localhost:8000/api/docs`
-- OpenAPI schema: `http://localhost:8000/openapi.json`
+- проверка процесса: `GET /health`, технический метод без обязательного тикера;
+- интерфейс Swagger: `http://localhost:8000/api/docs`;
+- схема OpenAPI: `http://localhost:8000/openapi.json`.
 
-FastAPI returns its standard `422` response for a missing/unsupported ticker or
-an invalid date. Database connection failures and pool timeouts are logged and
-returned as `503 Database unavailable`. Unexpected application/SQL errors remain
-`500` responses. Health and documentation routes are technical endpoints; the
-required ticker applies to all three price methods.
+При отсутствующем или неподдерживаемом тикере и некорректной дате FastAPI
+возвращает стандартный ответ `422`. Ошибки подключения к БД и превышение времени
+ожидания соединения из пула логируются и возвращаются как
+`503 Database unavailable`. Неожиданные ошибки приложения и SQL возвращают `500`.
+Проверка работоспособности и документация — технические методы; обязательный
+тикер требуется во всех трёх методах чтения цен.
 
-## Tests
+## Тесты
 
 ```bash
 pip install -e ".[dev]"
 pytest
 ```
 
-API tests exercise the real service, repository and FastAPI lifespan through
-an isolated SQLite database. Deribit client and collection tests replace HTTP
-requests, so the suite never calls the real exchange or a Redis broker.
+Тесты API используют настоящие сервис и репозиторий, запускают жизненный цикл
+FastAPI и работают с изолированной базой SQLite. В тестах клиента Deribit
+и сборщика HTTP-запросы подменяются, поэтому набор тестов не обращается
+к бирже или брокеру Redis.
 
-The PostgreSQL integration test applies `alembic upgrade head`, compares the
-migrated schema against ORM metadata and verifies exact Decimal persistence,
-ticker filtering and deterministic ordering. It is skipped unless
-`TEST_DATABASE_URL` points to a dedicated PostgreSQL test database:
+Интеграционный тест PostgreSQL применяет `alembic upgrade head`, сравнивает
+схему после миграции с метаданными ORM и проверяет точность сохранения Decimal,
+фильтрацию по тикеру и однозначную сортировку. Для его запуска задайте
+`TEST_DATABASE_URL`, указывающий на отдельную тестовую базу PostgreSQL.
+Без этой переменной интеграционный тест пропускается:
 
 ```bash
 export TEST_DATABASE_URL=postgresql+asyncpg://test_user:test_password@localhost:5432/deribit_test
 pytest
 ```
 
-In PowerShell use `$env:TEST_DATABASE_URL = 'postgresql+asyncpg://...'`.
-Never point this variable at production: the integration test applies migrations.
-Its data writes are rolled back. GitLab CI provides its own PostgreSQL service
-and runs the integration test automatically.
+В PowerShell используйте `$env:TEST_DATABASE_URL = 'postgresql+asyncpg://...'`.
+Не указывайте рабочую БД: интеграционный тест применяет миграции.
+Изменения тестовых данных откатываются. GitLab CI предоставляет отдельный
+сервис PostgreSQL и автоматически запускает интеграционный тест.
 
-Covered cases include all prices, newest price, empty-result `404`, UTC date
-filter, required/unsupported ticker, invalid date, valid Deribit parsing, HTTP
-errors and malformed Deribit payloads. Regression cases cover strict/extreme
-dates, equal timestamps, exact JSON decimals, HTTP session ownership, engine
-cleanup, database status codes and collection failures with partial success.
+Проверяются получение всех цен и последней цены, `404` при отсутствии последней
+цены, фильтр по UTC-дате, обязательность и допустимые значения тикера,
+валидация даты, разбор ответов Deribit и обработка HTTP-ошибок.
+Регрессионные тесты покрывают крайние даты и строгий формат даты, одинаковые
+временные метки, точность десятичных чисел JSON, владение HTTP-сессией,
+освобождение ресурсов БД, HTTP-статусы ошибок и частичные сбои сбора цен.
 
-## Lint
+## Проверка стиля и форматирования
 
 ```bash
 ruff check .
 ruff format --check .
 ```
 
-To apply safe formatting locally:
+Для автоматического применения безопасных исправлений и форматирования:
 
 ```bash
 ruff check --fix .
 ruff format .
 ```
 
-## Configuration
+## Настройки
 
-| Variable | Purpose |
+| Переменная | Назначение |
 | --- | --- |
-| `DATABASE_URL` | SQLAlchemy async PostgreSQL URL |
-| `REDIS_URL` | Celery broker URL |
-| `DERIBIT_BASE_URL` | Deribit API v2 base URL |
-| `DERIBIT_TIMEOUT_SECONDS` | Total HTTP timeout |
-| `LOG_LEVEL` | Application and worker log level |
-| `API_PORT` | Host port mapped to container port 8000 |
-| `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` | PostgreSQL container initialization |
+| `DATABASE_URL` | URL асинхронного подключения SQLAlchemy к PostgreSQL |
+| `REDIS_URL` | URL брокера Celery |
+| `DERIBIT_BASE_URL` | Базовый URL API Deribit v2 |
+| `DERIBIT_TIMEOUT_SECONDS` | Общее время ожидания HTTP-запроса |
+| `LOG_LEVEL` | Уровень логирования приложения и обработчика задач |
+| `API_PORT` | Порт хоста, связанный с портом 8000 контейнера |
+| `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` | Первоначальная настройка контейнера PostgreSQL |
 
-`.env` is ignored by Git. Only non-secret examples live in `.env.example`.
+Файл `.env` исключён из Git. В `.env.example` находятся только примеры без
+рабочих секретов.
 
-## Design decisions
+## Архитектурные решения (Design decisions)
 
-### PostgreSQL, SQLAlchemy, repository and service
+### PostgreSQL, SQLAlchemy, репозиторий и сервис
 
-PostgreSQL is required by the assignment and is a good fit for durable,
-indexed time-series-like records. SQLAlchemy 2.x provides explicit async
-sessions and keeps SQL portable and testable. The repository owns persistence;
-the service owns use-case rules such as date boundaries. This is enough
-separation for the project without introducing generic repositories or a large
-domain layer.
+PostgreSQL требуется по заданию и подходит для надёжного хранения записей
+о ценах с индексами. SQLAlchemy 2.x предоставляет асинхронные сессии
+и позволяет проверять запросы в тестах. Репозиторий отвечает за хранение,
+а сервис — за правила чтения, например границы календарной даты.
+Для этого проекта такого разделения достаточно; универсальные репозитории
+и отдельный большой доменный слой не нужны.
 
-### Decimal / NUMERIC
+### Decimal и NUMERIC
 
-Financial values must not accumulate binary floating-point artifacts. Python
-uses `Decimal`, PostgreSQL uses `NUMERIC(28, 10)`, and API prices serialize as
-strings to preserve the exact stored value. JSON numbers are parsed directly
-as `Decimal` before reaching the database, without an intermediate `float`.
-`NUMERIC(28, 10)` supports 18 integer and 10 fractional digits; PostgreSQL rounds
-additional fractional digits to this storage scale.
+Двоичная арифметика с плавающей точкой может искажать финансовые значения.
+В Python используется `Decimal`, в PostgreSQL — `NUMERIC(28, 10)`,
+а в ответах API цены передаются строками для сохранения точности записанного
+значения. Десятичные числа JSON разбираются сразу в `Decimal`, без промежуточного
+`float`. Тип `NUMERIC(28, 10)` допускает 18 цифр до десятичной точки и 10 после
+неё. Дополнительные дробные знаки PostgreSQL округляет до этой точности хранения.
 
-### UNIX timestamp and UTC
+### UNIX-время и UTC
 
-`timestamp` is the application's actual receipt time, measured immediately
-after a successful Deribit response and stored as integer UNIX seconds. UNIX
-time is unambiguous and timezone-independent; all calendar interpretation is
-explicitly UTC.
+Поле `timestamp` содержит фактическое время получения цены приложением.
+Оно измеряется сразу после успешного ответа Deribit и сохраняется целым числом
+UNIX-секунд. UNIX-время не зависит от часового пояса; календарные даты
+интерпретируются явно в UTC.
 
-### Date filtering
+### Фильтрация по дате
 
-The phrase “filter by date” is interpreted as `ticker + YYYY-MM-DD` for a full
-UTC calendar day. The query uses a half-open interval `[00:00:00, next day
-00:00:00)`. This is simpler and less error-prone than constructing a
-`23:59:59` boundary, while selecting exactly the same second-resolution data.
+Формулировка «фильтр по дате» трактуется как `ticker + YYYY-MM-DD` за полный
+календарный день UTC. Запрос использует полуоткрытый интервал: от 00:00:00
+указанного дня включительно до 00:00:00 следующего дня не включительно.
+Для данных с точностью до секунды это даёт те же записи, что и верхняя граница
+23:59:59, и упрощает работу с границами диапазона.
 
 ### Celery Beat
 
-Beat is the scheduler and sends one collection task every 60 seconds; the
-worker executes it. This survives independently of FastAPI request workers and
-avoids an unmanaged `while True` loop or duplicate FastAPI background jobs.
-Each ticker is handled separately, so one Deribit/DB failure does not prevent
-the attempt for the other ticker.
+Beat выступает планировщиком и каждые 60 секунд отправляет задачу сбора,
+которую выполняет обработчик Celery. Сбор работает независимо от процессов
+FastAPI и не требует бесконечного цикла или фоновой задачи внутри каждого
+процесса API. Тикеры обрабатываются отдельно: ошибка Deribit или БД для одной
+валюты не мешает попытке обработать другую.
 
 ### Redis
 
-Celery needs a broker. Redis is sufficient, familiar and easy to run for this
-small test project. No result backend is configured because collection tasks
-do not return a result that callers need.
+Для передачи задач Celery нужен брокер. Redis подходит для небольшого тестового
+проекта и просто запускается локально. Хранилище результатов Celery не настроено:
+задачи сбора не возвращают результат, который нужен вызывающему коду.
 
-### Docker services
+### Сервисы Docker
 
-Compose separates `api`, `postgres`, `redis`, `celery-worker` and
-`celery-beat`, plus a short-lived `migrate` service. A broker, worker and
-scheduler are distinct processes in a correct Celery deployment. Combining
-them with the API or database into two containers would make lifecycle,
-healthchecks, logs and restarts less reliable. Named volumes retain database
-and broker data.
+Compose запускает отдельно `api`, `postgres`, `redis`, `celery-worker`
+и `celery-beat`, а также одноразовый сервис `migrate`. Брокер, обработчик
+и планировщик — разные процессы с собственным жизненным циклом. Разделение
+позволяет независимо управлять их проверками работоспособности, логами
+и перезапусками. Именованные тома сохраняют данные БД и брокера.
 
-### aiohttp and DeribitClient
+### aiohttp и DeribitClient
 
-The public `GET /public/get_index_price?index_name=...` endpoint needs no API
-key. A dedicated async client centralizes URL construction, timeout, connection
-lifecycle, network handling and response validation. One `ClientSession` is
-reused for both ticker requests in a task and then closed deterministically.
+Публичный метод `GET /public/get_index_price?index_name=...` не требует API-ключа.
+Отдельный асинхронный клиент отвечает за построение URL, время ожидания,
+жизненный цикл соединений, обработку сетевых ошибок и проверку ответа.
+Одна `ClientSession` используется для обоих тикеров в рамках задачи,
+после чего закрывается.
 
-### Database index
+### Индекс базы данных
 
-The composite `(ticker, timestamp)` index matches all current read paths:
-filter by ticker, find the newest timestamp, and filter a ticker by a timestamp
-range. No uniqueness constraint is added because two valid collections can
-occur in the same second.
+Составной индекс `(ticker, timestamp)` соответствует текущим запросам:
+фильтрации по тикеру, поиску последней записи и выборке тикера за диапазон
+времени. Ограничение уникальности не добавлено: два допустимых сбора могут
+произойти в одну секунду.
 
-### Task failure semantics
+### Обработка сбоев задачи
 
-Each ticker has a 25-second budget for fetching and saving. Expected network,
-database and timeout failures are logged; the other ticker is still attempted.
-After both attempts, any collected errors are raised together so Celery marks
-the task as failed while preserving successful writes. Unexpected errors outside
-the handled network/database exceptions propagate immediately. There are no
-automatic retries: the next scheduled run arrives in one minute.
+На получение и сохранение каждого тикера отводится 25 секунд. Ожидаемые
+сетевые ошибки, ошибки БД и превышение времени ожидания логируются;
+после сбоя одного тикера выполняется попытка обработать второй.
+Если возникли ошибки, после обеих попыток они выбрасываются вместе, чтобы
+Celery отметил задачу как неуспешную. Успешно сохранённые записи остаются в БД.
+Неожиданные исключения, не входящие в обрабатываемые категории, передаются
+выше немедленно. Автоматических повторов нет: следующий плановый запуск
+происходит через минуту.
 
-Beat messages expire after 60 seconds to discard stale queued polls. The task
-has a 55-second soft and 60-second hard limit as a worker-level safeguard on
-Linux prefork workers. These bounds limit outage backlog; they do not provide
-exactly-once delivery or recover samples missed while services are down.
+Сообщения Beat имеют срок годности 60 секунд, чтобы устаревшие задачи
+не накапливались в очереди. Для задачи также заданы мягкое ограничение
+выполнения в 55 секунд и жёсткое в 60 секунд на обработчиках Linux с пулом
+`prefork`. Эти ограничения уменьшают накопление задач при сбоях, но
+не гарантируют однократное выполнение и не восстанавливают цены,
+пропущенные во время простоя сервисов.
 
-### Resource ownership and module-level objects
+### Владение ресурсами и объекты на уровне модулей
 
-FastAPI owns its engine for the application lifespan; each request owns a
-session. Each Celery invocation creates and disposes its own engine and HTTP
-client inside the event loop started by `asyncio.run()`. No live connection is
-shared across event loops or worker processes. Settings are immutable and cached.
-Module-level FastAPI/Celery entry points, routers and loggers are framework
-registration objects, not shared database or HTTP sessions.
+FastAPI создаёт движок БД на время жизненного цикла приложения; каждому запросу
+выделяется своя сессия. Каждый запуск Celery создаёт и освобождает собственные
+движок БД и HTTP-клиент внутри цикла событий, запущенного через `asyncio.run()`.
+Открытые соединения не разделяются между циклами событий или процессами
+обработчиков. Настройки неизменяемы и кешируются.
 
-## GitLab CI
+Объекты приложений FastAPI/Celery, маршрутизаторы и логгеры на уровне модулей
+используются для регистрации компонентов фреймворков. Общих сессий БД
+или HTTP-клиентов на уровне модулей нет.
 
-`.gitlab-ci.yml` runs Ruff checks and pytest with Python 3.12 and an isolated
-PostgreSQL 17 service for integration coverage.
+## Непрерывная интеграция в GitLab
+
+Конфигурация `.gitlab-ci.yml` запускает проверки Ruff и pytest на Python 3.12.
+Для интеграционного теста используется изолированный сервис PostgreSQL 17.
